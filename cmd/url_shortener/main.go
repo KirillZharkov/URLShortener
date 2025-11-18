@@ -2,34 +2,112 @@ package main
 
 import (
 	"RestAPIURLShortener/internal/config"
-	"fmt"
+	"RestAPIURLShortener/internal/lib/logger/handlers/slogpretty"
+	"RestAPIURLShortener/internal/lib/logger/sl"
+	"RestAPIURLShortener/internal/storage/sqlite"
+	"net/http"
+	"os"
+
+	"RestAPIURLShortener/internal/http-server/handlers/del"
+	"RestAPIURLShortener/internal/http-server/handlers/redirect"
+	"RestAPIURLShortener/internal/http-server/handlers/url/save"
+	mwLogger "RestAPIURLShortener/internal/http-server/middleware/logger"
+
+	"github.com/go-chi/chi/v5"
+	"github.com/go-chi/chi/v5/middleware"
+	"golang.org/x/exp/slog"
 )
 
 const (
-	envLoval = "local"
+	envLocal = "local"
 	envDev   = "dev"
 	envProd  = "prod"
 )
 
 func main() {
 
-	//в этом файле нам нужен конфиг: библиотека cleanenv
 	cfg := config.MustLoad()
-	fmt.Println(cfg)
-	//потом logger: библиотека slog(import log/slog)
-	//инициируем storage:библиотека sqlite
-	//иницилизируем router:библиотека chi,"chi render"
-	//запускаем сервер
+
+	log := setupLogger(cfg.Env)
+
+	log.Info("Starting URL Shortener Service", slog.String("env", cfg.Env), slog.String("version", "123"))
+
+	log.Debug("debug messages are enabled")
+
+	storage, err := sqlite.NewStorage(cfg.StoragePath)
+
+	if err != nil {
+		log.Error("failed to initialize storage", sl.Err(err))
+		os.Exit(1)
+	}
+
+	router := chi.NewRouter()
+
+	router.Use(middleware.RequestID)
+
+	router.Use(middleware.Logger)
+
+	router.Use(mwLogger.New(log))
+
+	router.Use(middleware.Recoverer)
+
+	router.Use(middleware.URLFormat)
+
+	router.Route("/url", func(r chi.Router) {
+		r.Use(middleware.BasicAuth("url-shortner", map[string]string{cfg.HTTPServer.User: cfg.HTTPServer.Password}))
+		r.Post("/", save.New(log, storage))
+		r.Delete("/{alias}", del.New(log, storage))
+	})
+
+	router.Get("/{alias}", redirect.New(log, storage))
+
+	log.Info("starting server", slog.String("address", cfg.Address))
+
+	srv := &http.Server{
+		Addr:         cfg.Address,
+		Handler:      router,
+		ReadTimeout:  cfg.HTTPServer.Timeout,
+		WriteTimeout: cfg.HTTPServer.Timeout,
+		IdleTimeout:  cfg.HTTPServer.IdleTimeout,
+	}
+
+	if err := srv.ListenAndServe(); err != nil {
+		log.Error("failed to start server")
+	}
+
+	log.Error("server stopped")
 }
 
-// вынесим конфигурацию логгера в отдельную ф-ию,т.к. его установка будет зависить от параметра env
-// потому что локально хотим видеть текстовые логги , а на сервере т.е. в окруженние dev или prod
-// хотим видеть json на dev уровня дебаггинга, а на prod - json без отладочной информации
-// func setupLogger(env string) {
-// 	//объявляем логгер
-// 	var log *slog.Logger
-// 	switch env {
+func setupLogger(env string) *slog.Logger {
 
-// 	}
+	var log *slog.Logger
 
-// }
+	switch env {
+	case envLocal:
+		log = setupPrettySlog()
+	case envDev:
+		log = slog.New(
+			slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}),
+		)
+	case envProd:
+		log = slog.New(
+			slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}),
+		)
+	}
+
+	return log
+}
+
+func setupPrettySlog() *slog.Logger {
+
+	opts := slogpretty.PrettyHandlerOptions{
+
+		SlogOpts: &slog.HandlerOptions{
+			Level: slog.LevelDebug,
+		},
+	}
+
+	handler := opts.NewPrettyHandler(os.Stdout)
+
+	return slog.New(handler)
+}
