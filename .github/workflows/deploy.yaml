@@ -36,7 +36,7 @@ jobs:
         run: |
           go mod download
           go build -o url-shortener ./cmd/url-shortener
-       - name: Load deploy key
+       -name: Load deploy key
         uses: webfactory/ssh-agent@v0.9.0
         with:
           ssh-private-key: ${{ secrets.DEPLOY_SSH_KEY }}
