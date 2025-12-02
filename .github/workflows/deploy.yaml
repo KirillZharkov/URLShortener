@@ -50,6 +50,13 @@ jobs:
           rsync -avz -e 'ssh -i deploy_key.pem -o StrictHostKeyChecking=no' --exclude='.git' --exclude='.github' --exclude='tests' --exclude='.DS_Store' ./ ${{ env.HOST }}:${{ env.DEPLOY_DIRECTORY }}
         env:
           DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+      - name: Ensure storage DB on server
+        run: |
+          ssh -i deploy_key.pem -o StrictHostKeyChecking=no ${{ env.HOST }} "\
+            mkdir -p ${{ env.DEPLOY_DIRECTORY }}/storage && \
+            touch ${{ env.DEPLOY_DIRECTORY }}/storage/storage.db && \
+            chown root:root ${{ env.DEPLOY_DIRECTORY }}/storage/storage.db && \
+            chmod 600 ${{ env.DEPLOY_DIRECTORY }}/storage/storage.db"
       - name: Remove old systemd service file
         run: |
           ssh -i deploy_key.pem -o StrictHostKeyChecking=no ${{ env.HOST }} "rm -f /etc/systemd/system/url-shortener.service"
